@@ -22,10 +22,10 @@
 
     command: fwd/bwd/rtc/reb/ret/wrt/wet/reset
 
-    num1: hour (0-23) or indexToWrite (0-1023)
-    num2: minutes (0-59) or indexToWrite (0-1023)
-    num3: indexToWrite (0-1023)
-    example: f 12 0 2   hit enter to send (means forward 12 hours and 0 minutes, num3 is ignored in this case)
+    num1: hour    (0 -  12) or indexToStart (0-1023)
+    num2: minutes (0 -  59) or indexToStop (0-1023)
+    num3: value   (0 - 255) or indexToWrite (0-1023)
+    example: fwd 12 0 2   hit enter to send (means forward 12 hours and 0 minutes, num3 is ignored in this case)
 */
 
 #include <main.h>
