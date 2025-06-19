@@ -1,4 +1,4 @@
-/*  Last update: 2025-04-14
+/*  Last update: 2025-05-12
   The code adjusts the time of a clock using a stepper motor and an RTC DS3231 module (connected: SCL -> A5, SDA -> A4).
   It reads the current time from the RTC, saves it to EEPROM during power interruptions,
   and adjusts the clock hands when power is restored.
@@ -9,18 +9,17 @@
         bwd     - move clock ccw with num1*60 + num2 minutes
         ret     - read and display hour and minute saved to EEPROM index
         reb     - read and display bytes from num1 to num2 from EEPROM
-        rtc     - read and display time and date form RTC
-        wes     - write variable writeToEEPROMStatus with num1
-        wrt     - write time to RTC from host computer
-        wet     - write to EEPROM num1, num2 at num3
-        web     - write to EEPROM bytes from num1 to num2 with num3 value
+        rrtc     - read and display time and date form RTC
+        wrtc     - write time to RTC from host computer
+        weet     - write to EEPROM num1, num2 at num3
+        weeb     - write to EEPROM bytes from num1 to num2 with num3 value
         reset   - reset all EEPROM Bytes to 0xFF (255) value
 
     commands, num1, num2 are mandatory and separated by space, num3 can be optional
 
-    type command num1 num2 num3
+    type: command num1 num2 num3
 
-    command: fwd/bwd/rtc/reb/ret/wrt/wet/reset
+    command: fwd/bwd/rrtc/reb/ret/wrtc/weet/weeb/reset
 
     num1: hour    (0 -  12) or indexToStart (0-1023)
     num2: minutes (0 -  59) or indexToStop (0-1023)
@@ -39,13 +38,14 @@ const char daysOfTheWeek[7][10] = {
 
 void debugSerial(void);
 void handlePowerDown(void);
+void handleBrownOut(void);
 void saveTime(void);
 uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute);
 void resetEEPROM(void);
 void resetCounter(void);
 void handlePowerUp(void);
 uint8_t setClock(void);
-void moveClockHands(uint8_t directionToMove, uint16_t minuteToStep);
+void moveClockHands(uint8_t directionToMove, uint16_t secondsToStep);
 
 static bool saveTimeToEEPROM = false;   /* true means hour and minutes was save to EEPROM */
 static boolean powerDown = false;       /* true means power down detected - Clock has no power */
@@ -58,7 +58,7 @@ RTC_DS3231 rtc;
  * @param None
  * @return None
  * @note This function is called once at the beginning of the program to set up the necessary components.
- */
+*/
 void setup()
 {
 #ifdef DEBUGGING
@@ -66,6 +66,9 @@ void setup()
     while (!Serial)
         /* Wait for serial connection to be established */;
 #endif
+
+    pinMode(VLOTAGE_PIN, INPUT);
+    handleBrownOut(); /* Check for brownout condition */
 
     if (!rtc.begin())
     {
@@ -102,9 +105,18 @@ void setup()
     { /* Check if the MSB bit is set, indicating that time was not recovery yet. */
         saveTimeToEEPROM = true;
         powerDown = true; /* Set powerDown to true to avoid immediate power down handling */
+#ifdef DEBUGGING
         Serial.println("recoveryFlag Conditional");
+#endif
     }
-    // rtc.adjust(DateTime(2025, 4, 13, 18, 57, 10));
+
+    // handleBrownOut();
+    // rtc.adjust(DateTime(2025, 4, 13, num1, num2, 0));
+    // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+
+#ifdef DEBUGGING
+    Serial.println("Ready to Go!");
+#endif
 }
 
 /***************************************************************************************************************
@@ -151,6 +163,40 @@ void loop()
 }
 
 /***************************************************************************************************************
+ * @brief Handle brownout events at setup() or read voltage on debugging.
+ * @param None
+ * @return None
+ * @note If the voltage is below the threshold, it waits until the voltage recovers to ensure the system is 
+ * stable before proceeding. If the voltage is under 5V, RTC will be in an infinite loop and will need an 
+ * restart to recover.
+ */
+void handleBrownOut(void)
+{
+    float sensorValue = analogRead(VLOTAGE_PIN);
+    float voltage = (sensorValue / 1023.0) * REFERENCE_VOLTAGE;
+    
+    Serial.print("A0 Voltage: ");
+    Serial.println(voltage);
+    Serial.print("Input Voltage: ");
+    Serial.println((voltage * ARDUINO_VOLTAGE_INPUT) / REFERENCE_VOLTAGE);
+
+    /* Check if the voltage is below the brownout threshold */
+    if (voltage < BROWNOUT_THRESHOLD)
+    {
+        Serial.println("Brownout detected! Taking action...");
+        
+        while (voltage < BROWNOUT_THRESHOLD)
+        {/* Wait for the voltage to recover */
+            sensorValue = analogRead(VLOTAGE_PIN);
+            voltage = (sensorValue / 1023.0) * REFERENCE_VOLTAGE;
+        }
+
+        /* Power is back up */
+        Serial.println("Power is good!");
+    }
+}
+
+/***************************************************************************************************************
  * @brief Handle power down events and save the current time to EEPROM.
  * @param None
  * @return None
@@ -182,14 +228,13 @@ void saveTime(void)
     uint8_t currentHour = currentTime.hour();
     uint8_t currentMinute = currentTime.minute();
 
+    index += 2; /* Increment index to save the current time */
+
     if (index > EEPROM_MAX_USE_SIZE)
-    {
+    {/* Check if index exceeds EEPROM size */
         resetCounter(); /* Reset EEPROM if index exceeds limit (1024 - 2 Bytes) */
         index = 2; /* Reset index to EEPROM[2] where start the savings. */
-    }
-    else
-    {
-        index += 2;
+        EEPROM[1] = index;
     }
 
     /* Convert to 12-hour format */
@@ -311,7 +356,6 @@ void resetCounter(void)
  */
 void handlePowerUp(void)
 {
-    uint8_t setClockFlag = SUCCESS; /* Flag to indicate if the clock was set correctly. */
     if (false == saveTimeToEEPROM)
     { /* Normal clock function */
         digitalWrite(STEPPER_PULSE_PIN, HIGH);
@@ -324,16 +368,16 @@ void handlePowerUp(void)
     { /* Adjust clock using EEPROM data */
         if (!powerDown)
         { /* Check if the power is up */
+            uint8_t setClockFlag = SUCCESS; /* Flag to indicate if the clock was set correctly. */
 #ifdef DEBUGGING
-        Serial.println("Read EEPROM");
+            Serial.println("Read EEPROM");
 #endif
-        setClockFlag = setClock();
+            setClockFlag = setClock();
 
-        if (SUCCESS != setClockFlag)
-        {
-            writeToEEPROMStatus = ERROR; /* Set error status */
-        }
-        
+            if (SUCCESS != setClockFlag)
+            {
+                writeToEEPROMStatus = ERROR; /* Set error status */
+            }
         }
     }
 }
@@ -381,13 +425,12 @@ uint8_t setClock(void)
     }
     else
     {
-        directionToMove = (currentHour > savedHour) ? CW_DIR : CCW_DIR;
+        directionToMove = (currentHour >= savedHour) ? CW_DIR : CCW_DIR;
+
     }
 
     /* Convert the difference from hours to minutes. */
     minuteToStep = hourDifference * 60;
-    Serial.print("Hour difference: ");
-    Serial.println(hourDifference); 
 
     /* Calculate minute difference */
     uint8_t minuteDifference = (currentMinute >= savedMinute) ? currentMinute - savedMinute : savedMinute - currentMinute;
@@ -418,7 +461,7 @@ uint8_t setClock(void)
 
 
     /* Move the hands of the clock with the respective minutes. */
-    moveClockHands(directionToMove, minuteToStep);
+    moveClockHands(directionToMove, (minuteToStep * 60)); /* Convert minutes to seconds */
     /* Reset the stepper motor direction to default (CW) */
     digitalWrite(STEPPER_DIR_PIN, CW_DIR);
     /* Reset the flag indicating time recovery is complete */
@@ -432,23 +475,39 @@ uint8_t setClock(void)
 /***************************************************************************************************************
  * @brief Move the clock hands fast using the stepper motor.
  * @param directionToMove: Direction to move the clock hands (CW or CCW).
- * @param minuteToStep: Number of minutes to move the clock hands.
+ * @param secondsToStep: Number of minutes to move the clock hands.
  * @return None
  * @note This function moves the clock hands very fast using the stepper motor in the specified
  *       direction for the specified number of minutes to set the clock hands correctly.
  *      The function calculates the number of steps required and sends pulse signals to the stepper motor driver.
  */
-void moveClockHands(uint8_t directionToMove, uint16_t minuteToStep)
-{
-    digitalWrite(STEPPER_DIR_PIN, directionToMove); /* Set direction */
-    uint16_t steps = ((minuteToStep * 83) + (minuteToStep / (uint16_t)3)); /* Convert minutes to steps */
+// void moveClockHands(uint8_t directionToMove, uint16_t minuteToStep)
+// {
+//     digitalWrite(STEPPER_DIR_PIN, directionToMove); /* Set direction */
+//     uint32_t steps = (uint32_t)(((uint32_t)minuteToStep * 1333) + ((uint32_t)minuteToStep / (uint32_t)3)); /* Convert minutes to steps */
 
-    for (uint16_t i = 0; i < steps; i++)
+//     for (uint32_t i = 0; i < steps; i++)
+//     {
+//         digitalWrite(STEPPER_PULSE_PIN, HIGH);
+//         delayMicroseconds(STEPPER_PULSE_TIME);
+//         digitalWrite(STEPPER_PULSE_PIN, LOW);
+//         delayMicroseconds(STEPPER_FAST_TIME_ADJUSTMENT);
+//     }
+
+//     digitalWrite(STEPPER_DIR_PIN, CW_DIR); /* Set direction cw */
+// }
+
+void moveClockHands(uint8_t directionToMove, uint16_t secondsToStep)
+{/* 80.000 de microsteps (1/16) pentru 1 tura */
+    digitalWrite(STEPPER_DIR_PIN, directionToMove); /* Set direction */
+    uint32_t steps = (uint32_t)(((uint32_t)secondsToStep * 22) + ((uint32_t)(secondsToStep) / (uint32_t)3)); /* Convert minutes to steps */
+
+    for (uint32_t i = 0; i < steps; i++)
     {
         digitalWrite(STEPPER_PULSE_PIN, HIGH);
         delayMicroseconds(STEPPER_PULSE_TIME);
         digitalWrite(STEPPER_PULSE_PIN, LOW);
-        delay(STEPPER_FAST_TIME_ADJUSTMENT);
+        delayMicroseconds(STEPPER_FAST_TIME_ADJUSTMENT);
     }
 
     digitalWrite(STEPPER_DIR_PIN, CW_DIR); /* Set direction cw */
@@ -469,15 +528,15 @@ void debugSerial(void)
         uint16_t num1 = Serial.parseInt();
         uint16_t num2 = Serial.parseInt();
         uint16_t num3 = Serial.parseInt();
-        uint16_t minuteToStep = (num1 * 60) + num2;
+        uint16_t secondsToStep = ((num1 * 3600) + (num2 * 60) + num3); /* Convert hours and minutes to seconds */
 
         if (command == "fwd")
         {
             Serial.print("CW direction for: ");
-            Serial.print(minuteToStep);
-            Serial.println(" minutes");
+            Serial.print(secondsToStep);
+            Serial.println(" seconds");
 
-            moveClockHands(CW_DIR, minuteToStep);
+            moveClockHands(CW_DIR, secondsToStep);
             
             Serial.println("Done!");
             Serial.println("");
@@ -486,10 +545,10 @@ void debugSerial(void)
         if (command == "bwd")
         {
             Serial.print("CCW direction for: ");
-            Serial.print(minuteToStep);
-            Serial.println(" minutes");
+            Serial.print(secondsToStep);
+            Serial.println(" seconds");
 
-            moveClockHands(CCW_DIR, minuteToStep);
+            moveClockHands(CCW_DIR, secondsToStep);
             
             Serial.println("Done!");
             Serial.println("");
@@ -499,8 +558,7 @@ void debugSerial(void)
         {
             uint16_t index = (EEPROM[0] << 8) | EEPROM[1];
             
-            Serial.println("read EEPROM: ");
-            Serial.print("index: ");
+            Serial.println("read EEPROM index: ");
             Serial.println(index);
             Serial.print("Hour: ");
             Serial.println(EEPROM[index]);
@@ -524,7 +582,7 @@ void debugSerial(void)
             Serial.println("");
         }
 
-        if (command == "rtc")
+        if (command == "rrtc")
         { /* Read RTC */
             DateTime currentTime = rtc.now();
 
@@ -545,25 +603,14 @@ void debugSerial(void)
             Serial.println("");
         }
 
-        if (command == "wes")
-        {
-            Serial.print("Write variable writeToEEPROMStatus with: ");
-            Serial.println(num1);
-
-            writeToEEPROMStatus = num1;
-
-            Serial.println("Done!");
-            Serial.println("");
+        if (command == "rvolt")
+        { /* Read arduino input voltage */
+            
+            handleBrownOut();
+            Serial.println("Done.");
         }
 
-        if (command == "wrt")
-        { /* Write RTC */
-            // rtc.adjust(DateTime(2025, 4, 13, num1, num2, 0));
-            rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-            Serial.println("RTC time was set.");
-        }
-
-        if (command == "wet")
+        if (command == "weet")
         {
             uint8_t retval = SUCCESS;
             Serial.println("write time to EEPROM ");
@@ -585,7 +632,7 @@ void debugSerial(void)
             Serial.println("");
         }
 
-        if (command == "web")
+        if (command == "weeb")
         {
             Serial.println("Write bytes to EEPROM");
 
