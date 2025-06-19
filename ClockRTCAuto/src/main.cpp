@@ -481,26 +481,10 @@ uint8_t setClock(void)
  *       direction for the specified number of minutes to set the clock hands correctly.
  *      The function calculates the number of steps required and sends pulse signals to the stepper motor driver.
  */
-// void moveClockHands(uint8_t directionToMove, uint16_t minuteToStep)
-// {
-//     digitalWrite(STEPPER_DIR_PIN, directionToMove); /* Set direction */
-//     uint32_t steps = (uint32_t)(((uint32_t)minuteToStep * 1333) + ((uint32_t)minuteToStep / (uint32_t)3)); /* Convert minutes to steps */
-
-//     for (uint32_t i = 0; i < steps; i++)
-//     {
-//         digitalWrite(STEPPER_PULSE_PIN, HIGH);
-//         delayMicroseconds(STEPPER_PULSE_TIME);
-//         digitalWrite(STEPPER_PULSE_PIN, LOW);
-//         delayMicroseconds(STEPPER_FAST_TIME_ADJUSTMENT);
-//     }
-
-//     digitalWrite(STEPPER_DIR_PIN, CW_DIR); /* Set direction cw */
-// }
-
 void moveClockHands(uint8_t directionToMove, uint16_t secondsToStep)
 {/* 80.000 de microsteps (1/16) pentru 1 tura */
     digitalWrite(STEPPER_DIR_PIN, directionToMove); /* Set direction */
-    uint32_t steps = (uint32_t)(((uint32_t)secondsToStep * 22) + ((uint32_t)(secondsToStep) / (uint32_t)3)); /* Convert minutes to steps */
+    uint32_t steps = (uint32_t)(((uint32_t)secondsToStep * 22) + ((uint32_t)(secondsToStep) / (uint32_t)4)); /* Convert minutes to steps */
 
     for (uint32_t i = 0; i < steps; i++)
     {
