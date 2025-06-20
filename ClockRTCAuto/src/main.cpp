@@ -40,9 +40,9 @@ void debugSerial(void);
 void handlePowerDown(void);
 void handleBrownOut(void);
 void saveTime(void);
-uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute);
+uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute, uint8_t currentSecond, uint8_t currentDay, uint8_t currentMonth, uint8_t currentYear);
 void resetEEPROM(void);
-void resetCounter(void);
+void resetCounters(void);
 void handlePowerUp(void);
 uint8_t setClock(void);
 void moveClockHands(uint8_t directionToMove, uint16_t secondsToStep);
@@ -90,27 +90,30 @@ void setup()
     pinMode(STEPPER_PULSE_PIN, OUTPUT);
     pinMode(STEPPER_DIR_PIN, OUTPUT);
     digitalWrite(STEPPER_DIR_PIN, LOW); /* Set default direction (CW) */
-   
-    /* Reset EEPROM if counter exceeds limit */
-    if (EEPROM[0] > 0x03u)
+
+    uint16_t index = (EEPROM[0] << 8) | EEPROM[1]; /* Read index from EEPROM */
+
+    /* Reset EEPROM if counter exceeds limit - robustness - */
+    if (index > EEPROM_MAX_USE_SIZE)
+    { /* Check if index exceeds EEPROM size */
+        resetCounters(); /* Reset EEPROM if index exceeds limit (1024 - 2 Bytes) */
+        EEPROM[1u] = 4u;
+    }
+    else
     {
-        resetCounter();
+        /* Check if time is allready saved in EEPROM in case of uC reset. */
+        uint8_t recoveryFlag = CHECK_TIME_RECOVER_FLAG(EEPROM[index]);
+        
+        if (0 != recoveryFlag)
+        { /* Check if the MSB bit is set, indicating that time was not recovery yet. */
+            saveTimeToEEPROM = true;
+            powerDown = true; /* Set powerDown to true to avoid immediate power down handling */
+    #ifdef DEBUGGING
+            Serial.println("recoveryFlag Conditional");
+    #endif
+        }
     }
 
-    /* Check if time is allready saved in EEPROM in case of uC reset. */
-    uint16_t index = (EEPROM[0] << 8) | EEPROM[1];
-    uint8_t recoveryFlag = CHECK_TIME_RECOVER_FLAG(EEPROM[index]);
-    
-    if (0 != recoveryFlag)
-    { /* Check if the MSB bit is set, indicating that time was not recovery yet. */
-        saveTimeToEEPROM = true;
-        powerDown = true; /* Set powerDown to true to avoid immediate power down handling */
-#ifdef DEBUGGING
-        Serial.println("recoveryFlag Conditional");
-#endif
-    }
-
-    // handleBrownOut();
     // rtc.adjust(DateTime(2025, 4, 13, num1, num2, 0));
     // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 
@@ -225,31 +228,46 @@ void saveTime(void)
 {
     DateTime currentTime = rtc.now();
     uint16_t index = (EEPROM[0] << 8) | EEPROM[1];
+    uint16_t countResetIdx = (EEPROM[2] << 8) | EEPROM[3];
     uint8_t currentHour = currentTime.hour();
     uint8_t currentMinute = currentTime.minute();
+    uint8_t currentSecond = currentTime.second();
+    uint8_t currentDay = currentTime.day();
+    uint8_t currentMonth = currentTime.month();
+    uint8_t currentYear = currentTime.year();
 
-    index += 2; /* Increment index to save the current time */
+    index += 3u; /* Increment index to save the current time */
 
     if (index > EEPROM_MAX_USE_SIZE)
     {/* Check if index exceeds EEPROM size */
-        resetCounter(); /* Reset EEPROM if index exceeds limit (1024 - 2 Bytes) */
-        index = 2; /* Reset index to EEPROM[2] where start the savings. */
-        EEPROM[1] = index;
+        resetCounters(); /* Reset EEPROM if index exceeds limit (1024 - 2 Bytes) */
+        index = 7u; /* Reset index to EEPROM[4] where start the savings. */
+        countResetIdx++; /* Increment the counter for reset index */
+        EEPROM[1u] = index; /* Write new index to EEPROM */
+        EEPROM[2u] = UPPER_BYTE(countResetIdx); /* Write upper byte of index */
+        EEPROM[3u] = LOWER_BYTE(countResetIdx); /* Write lower byte of index */
     }
 
-    /* Convert to 12-hour format */
-    if (currentHour > 12)
+    currentYear -= 2000u; /* Convert year to 2-digit format */
+
+    if (currentDay == EEPROM[4u])
     {
-        currentHour -= 12;
+        currentDay = 0u; /* Use the day from EEPROM if it matches */
     }
-    else if (currentHour == 0)
+
+    if (currentMonth == EEPROM[5u])
     {
-        currentHour = 12;
+        currentMonth = 0u; /* Use the month from EEPROM if it matches */
+    }
+
+    if (currentYear == EEPROM[6u])
+    {
+        currentYear = 0u; /* Use the year from EEPROM if it matches */
     }
 
     currentHour = SET_TIME_RECOVER_FLAG(currentHour); /* Set the MSB bit 8 to signal time is ready for recover */
 
-    writeToEEPROMStatus = writeToEEPROM(index, currentHour, currentMinute); /* Write current time to EEPROM */
+    writeToEEPROMStatus = writeToEEPROM(index, currentHour, currentMinute, currentSecond, currentDay, currentMonth, currentYear); /* Write current time to EEPROM */
 
     saveTimeToEEPROM = true; /* Set flag to indicate time has been saved */
 }
@@ -270,11 +288,11 @@ void saveTime(void)
  *
  * The function uses the EEPROM library to write data to the EEPROM.
  */
-uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute)
+uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute, uint8_t currentSecond, uint8_t currentDay, uint8_t currentMonth, uint8_t currentYear)
 {
     /* Write upper and lower bytes of the index */
-    EEPROM.write(0, UPPER_BYTE(index));
-    if (EEPROM.read(0) != UPPER_BYTE(index))
+    EEPROM.write(0u, UPPER_BYTE(index));
+    if (EEPROM.read(0u) != UPPER_BYTE(index))
     {
 #ifdef DEBUGGING
         Serial.println("Error: Failed to write upper byte of index to EEPROM, status ERROR. ");
@@ -282,8 +300,8 @@ uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute
         return ERROR;
     }
 
-    EEPROM.write(1, LOWER_BYTE(index));
-    if (EEPROM.read(1) != LOWER_BYTE(index))
+    EEPROM.write(1u, LOWER_BYTE(index));
+    if (EEPROM.read(1u) != LOWER_BYTE(index))
     {
 #ifdef DEBUGGING
         Serial.println("Error: Failed to write lower byte of index to EEPROM, status ERROR. ");
@@ -302,14 +320,67 @@ uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute
     }
 
     /* Write current minute next to hour */
-    EEPROM.write(index + 1, currentMinute);
-    if (EEPROM.read(index + 1) != currentMinute)
+    EEPROM.write(index + 1u, currentMinute);
+    if (EEPROM.read(index + 1u) != currentMinute)
     {
 #ifdef DEBUGGING
         Serial.println("Error: Failed to write current minute to EEPROM, status ERROR. ");
 #endif
         return ERROR;
     }
+
+    /* Write current seconds next to minutes */
+    EEPROM.write(index + 2u, currentSecond);
+    if (EEPROM.read(index + 2u) != currentSecond)
+    {
+#ifdef DEBUGGING
+        Serial.println("Error: Failed to write current seconds to EEPROM, status ERROR. ");
+#endif
+        return ERROR;
+    }
+
+    if (currentDay != 0u)
+    {
+        Serial.println("Write current day to EEPROM, status OK. ");
+        /* Write current day */
+        EEPROM.write(4u, currentDay);
+        if (EEPROM.read(4u) != currentDay)
+        {
+    #ifdef DEBUGGING
+            Serial.println("Error: Failed to write current day to EEPROM, status ERROR. ");
+    #endif
+            return ERROR;
+        }
+    }
+
+    if (currentMonth != 0u)
+    {
+        /* Write current month */
+        Serial.println("Write current month to EEPROM, status Ok. ");
+        EEPROM.write(5u, currentMonth);
+        if (EEPROM.read(5u) != currentMonth)
+        {
+    #ifdef DEBUGGING
+            Serial.println("Error: Failed to write current month to EEPROM, status ERROR. ");
+    #endif
+            return ERROR;
+        }
+    }
+
+    if (currentYear != 0u)
+    {
+        /* Write current year */
+        Serial.println("Write current year to EEPROM, status Ok. ");
+        EEPROM.write(6u, currentYear);
+        if (EEPROM.read(6u) != currentYear)
+        {
+    #ifdef DEBUGGING
+            Serial.println("Error: Failed to write current year to EEPROM, status ERROR. ");
+    #endif
+            return ERROR;
+        }
+    }
+
 
 #ifdef DEBUGGING
     Serial.println("EEPROM write successful.");
@@ -326,7 +397,7 @@ uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute
  */
 void resetEEPROM(void)
 {
-    for (size_t i = 0; i < 1024; i++)
+    for (uint8_t i = 0; i < 1024; i++)
     {
         /* code */
         EEPROM.write(i, 255); /* Reset all bytes in EEPROM */
@@ -340,10 +411,12 @@ void resetEEPROM(void)
  * @note This function resets the upper and lower bytes of the index in EEPROM to 0.
  *       It is used to clear the EEPROM data when the index exceeds the maximum size.
  */
-void resetCounter(void)
+void resetCounters(void)
 {
-    EEPROM.write(0, 0); /* Reset upper byte of index */
-    EEPROM.write(1, 0); /* Reset lower byte of index */
+    for (uint8_t i = 0; i < 7u; i++)
+    {
+        EEPROM.write(i, 0); /* Reset upper byte of index */
+    }
 }
 
 /***************************************************************************************************************
@@ -397,26 +470,30 @@ uint8_t setClock(void)
     uint16_t index = (EEPROM[0] << 8) | EEPROM[1];
     uint8_t currentHour = currentTime.hour();
     uint8_t currentMinute = currentTime.minute();
+    uint8_t currentSecond = currentTime.second();
     uint8_t savedHour = EEPROM[index];
     uint8_t savedMinute = EEPROM[index + 1];
+    uint8_t savedSecond = EEPROM[index + 2]; /* Read saved seconds from EEPROM */
     uint8_t directionToMove = CW_DIR;
     uint16_t minuteToStep = 0;
+    uint16_t secondsToStep = 0;
 
     /* Clear the MSB bit of the saved hour to indicate recovery is complete */
     savedHour = CLEAR_TIME_RECOVER_FLAG(savedHour);
     /* Robustness for a new EEPROM (all 0xFFu) */
-    if (savedHour > 12)
+    if (savedHour > 24)
     { /* Robustness for an invalid hour. */
         return ERROR;
     }
-
+    /* Save hour after clear the recovery flag to mark that recovery was done. */
     EEPROM[index] = savedHour;
 
     /* Convert to 12-hour format */
+    savedHour = (savedHour == 0) ? 12 : (savedHour > 12 ? savedHour - 12 : savedHour);
     currentHour = (currentHour == 0) ? 12 : (currentHour > 12 ? currentHour - 12 : currentHour);
 
     /* Calculate hour difference */
-    uint8_t hourDifference = (currentHour > savedHour) ? currentHour - savedHour : savedHour - currentHour;
+    uint8_t hourDifference = (currentHour >= savedHour) ? currentHour - savedHour : savedHour - currentHour;
 
     if (hourDifference >= 6)
     {
@@ -431,7 +508,6 @@ uint8_t setClock(void)
 
     /* Convert the difference from hours to minutes. */
     minuteToStep = hourDifference * 60;
-
     /* Calculate minute difference */
     uint8_t minuteDifference = (currentMinute >= savedMinute) ? currentMinute - savedMinute : savedMinute - currentMinute;
 
@@ -443,6 +519,11 @@ uint8_t setClock(void)
         }
         else
         {
+            if (0u == minuteToStep)
+            {
+                directionToMove = CCW_DIR;
+            }
+            
             minuteToStep = (minuteToStep >= minuteDifference) ? minuteToStep - minuteDifference : minuteDifference - minuteToStep;
         }
         
@@ -451,6 +532,11 @@ uint8_t setClock(void)
     {
         if (currentMinute >= savedMinute)
         {
+            if (0u == minuteToStep)
+            {
+                directionToMove = CW_DIR;
+            }
+
             minuteToStep = (minuteToStep >= minuteDifference) ? minuteToStep - minuteDifference : minuteDifference - minuteToStep;
         }
         else
@@ -459,9 +545,68 @@ uint8_t setClock(void)
         }
     }
 
+    /* Calculate minute difference */
+    uint8_t secondsDifference = (currentSecond >= savedSecond) ? currentSecond - savedSecond : savedSecond - currentSecond;
+    /* Convert minutes to seconds */
+    secondsToStep = minuteToStep * 60; /* Convert minutes to seconds */
 
-    /* Move the hands of the clock with the respective minutes. */
-    moveClockHands(directionToMove, (minuteToStep * 60)); /* Convert minutes to seconds */
+    /* If the saved second is greater than the current second, adjust the minute to step */
+    if (directionToMove == CW_DIR)
+    {
+        if (savedSecond > currentSecond)
+        {
+            if (0u == secondsToStep)
+            {
+                directionToMove = CCW_DIR; /* Change direction to CCW if no seconds to step */
+            }
+
+            secondsToStep = (secondsToStep >= secondsDifference) ? secondsToStep - secondsDifference : secondsDifference - secondsToStep; /* Subtract seconds if moving clockwise */
+        }
+        else
+        {
+            secondsToStep = secondsToStep + secondsDifference; /* Add seconds if moving clockwise */
+        }
+    }
+    else
+    {
+        if (savedSecond > currentSecond)
+        {
+            secondsToStep = secondsToStep + secondsDifference; /* Add seconds if moving clockwise */
+        }
+        else
+        {
+            if (0u == secondsToStep)
+            {
+                directionToMove = CW_DIR; /* Change direction to CW if no seconds to step */
+            }
+
+            secondsToStep = (secondsToStep >= secondsDifference) ? secondsToStep - secondsDifference : secondsDifference - secondsToStep; /* Subtract seconds if moving counterclockwise */
+        }
+    }
+
+    if (directionToMove == CW_DIR)
+    {/* Add the delay from debaunce to ensure the clock precision. */
+        secondsToStep += 5u;
+    }
+    else
+    {
+        secondsToStep -= 5u;
+    }
+    
+
+#ifdef DEBUGGING
+    Serial.print("Move clock for: ");
+    Serial.print(hourDifference);
+    Serial.print(" hours, ");  
+    Serial.print((minuteDifference));
+    Serial.print(" minutes, ");
+    Serial.print((secondsDifference));
+    Serial.println(" seconds.");
+    Serial.print("In direction: ");
+    Serial.println(directionToMove);
+#endif
+    /* Move the hands of the clock with the respective secondes. */
+    moveClockHands(directionToMove, secondsToStep);
     /* Reset the stepper motor direction to default (CW) */
     digitalWrite(STEPPER_DIR_PIN, CW_DIR);
     /* Reset the flag indicating time recovery is complete */
@@ -601,7 +746,7 @@ void debugSerial(void)
 
             num1 = SET_TIME_RECOVER_FLAG(num1); /* Set the MSB bit 8 to signal time is ready for recover */
 
-            retval = writeToEEPROM(num3, num1, num2);
+            retval = writeToEEPROM(num3, num1, num2, 30u, 1, 1, 25); /* Write current time to EEPROM */
 
             Serial.print("Done with status ");
             if (retval == SUCCESS)
