@@ -5,7 +5,6 @@
 #include <Arduino.h>
 #include <RTClib.h>
 #include <EEPROM.h>
-#include <avr/wdt.h> // Include the watchdog timer library
 
 /* Use for debugging purpose, comment when done. */
 #define DEBUGGING
@@ -41,5 +40,4 @@
 #define ERROR                           1u
 
 #endif
-/* MAIN_H */
-/* End of file */
+/* MAIN_H End of file*/
