@@ -10,14 +10,14 @@
         bwd     - move clock ccw with num1*60 + num2 minutes
         ret     - read and display hour and minute saved to EEPROM index
         reb     - read and display bytes from num1 to num2 from EEPROM
-        rrtc    - read and display time and date form RTC
-        weet    - write to EEPROM num1, num2 at num3
-        weeb    - write to EEPROM bytes from num1 to num2 with num3 value
+        rtc     - read and display time and date form RTC
+        wet     - write to EEPROM num1, num2 at num3
+        web     - write to EEPROM bytes from num1 to num2 with num3 value
         reset   - reset all EEPROM Bytes to 0xFF (255) value
 
     type: command [num1] [num2] [num3]
 Where:
-    command is one of folowing: fwd, bwd, rrtc, reb, ret, weet, weeb, reset
+    command is one of folowing: fwd, bwd, rtc, reb, ret, wet, web, reset
     num1: hour (0 -  12) or indexToStart (0-1023)
     num2: minutes (0 - 59) or indexToStop (0-1023)
     num3: seconds (0 - 59) or indexToWrite (0-1023)
@@ -40,14 +40,16 @@ static uint8_t writeToEEPROMStatus = SUCCESS;   /* Status of the write operation
 RTC_DS3231 rtc;
 
 /* Functions prototipes */
-void debugSerial(void);
 void handlePowerDown(void);
-void handleBrownOut(void);
+void handlePowerUp(void);
 void saveTime(void);
 void resetEEPROM(void);
 void resetCounters(void);
-void handlePowerUp(void);
 void moveClockHands(uint8_t directionToMove, uint16_t secondsToStep);
+#ifdef DEBUGGING
+void debugSerial(void);
+void printFormatedDateAndTime(uint8_t hour, uint8_t minute, uint8_t second, uint8_t day, uint8_t month, uint16_t year);
+#endif
 uint8_t setClock(void);
 uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute, uint8_t currentSecond, uint8_t currentDay, uint8_t currentMonth, uint8_t currentYear);
 
@@ -60,7 +62,7 @@ uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute
 */
 void setup()
 {
-#ifdef DEBUGGING
+    #ifdef DEBUGGING
     Serial.begin(9600); /* Initialize serial communication for debugging */
     while (!Serial)
         /* Wait for serial connection to be established */;
@@ -69,10 +71,6 @@ void setup()
 #ifdef DEBUGGING
     Serial.println("Serial communication ready!");
 #endif
-
-    /* Check for brownout condition for enough voltage for uC to work properly. */
-    pinMode(VLOTAGE_PIN, INPUT);
-    handleBrownOut();
 
     /* Check if the RTC work properly, otherwhise it will stop the program to run. */
     if (!rtc.begin())
@@ -121,7 +119,7 @@ void setup()
             saveTimeToEEPROM = true;
             powerDown = true; /* Set powerDown to true to avoid immediate power down handling */
     #ifdef DEBUGGING
-            Serial.println("recoveryFlag Conditional");
+            Serial.println("recoveryFlag on, time is ready to recover!");
     #endif
         }
     }
@@ -137,7 +135,7 @@ Manual adjust date and time: */
     // rtc.adjust(adjustedTime);
 
 #ifdef DEBUGGING
-    Serial.println("Ready to Go!");
+    Serial.println("Program started!");
 #endif
 }
 
@@ -182,48 +180,6 @@ void loop()
 #ifdef DEBUGGING
     debugSerial();
 #endif
-}
-
-/***************************************************************************************************************
- * @brief Handle brownout events at setup() or read voltage on debugging.
- * @param None
- * @return None
- * @note If the voltage is below the threshold, it waits until the voltage recovers to ensure the system is 
- * stable before proceeding. If the voltage is under 5V, RTC will be in an infinite loop and will need an 
- * restart to recover. A treshold of 3.26V is used to detect brownout conditions that means the voltage is 
- * at least 7.5V for the Arduino to work properly.
- */
-void handleBrownOut(void)
-{
-    float sensorValue = analogRead(VLOTAGE_PIN);
-    float voltage = (sensorValue / 1023.0) * REFERENCE_VOLTAGE;
-#ifdef DEBUGGING
-    Serial.print("A0 Voltage: ");
-    Serial.println(voltage);
-    Serial.print("Input Voltage: ");
-    Serial.println((voltage * ARDUINO_VOLTAGE_INPUT) / REFERENCE_VOLTAGE);
-#endif
-    
-    if (voltage < BROWNOUT_THRESHOLD)
-    {/* Check if the voltage is below the brownout threshold */
-#ifdef DEBUGGING
-        Serial.println("Brownout detected! Taking action...");
-        Serial.print("BROWNOUT_THRESHOLD: ");
-        Serial.println(BROWNOUT_THRESHOLD);
-#endif
-        while (voltage < BROWNOUT_THRESHOLD)
-        {/* Wait for the voltage to recover */
-            delay(1000); /* Delay to avoid flooding the serial output */
-            sensorValue = analogRead(VLOTAGE_PIN);
-            voltage = (sensorValue / 1023.0) * REFERENCE_VOLTAGE;
-        }
-
-        /* Power is back */
-        Serial.println("Power is back!");
-    }
-
-    /* Power is good */
-    Serial.println("Power is good!");
 }
 
 /***************************************************************************************************************
@@ -620,7 +576,13 @@ uint8_t setClock(void)
     {
         secondsToStep -= 5u;
     }
-    
+
+#ifdef DEBUGGING
+    Serial.print("Moving clock hands in direction: ");
+    Serial.println(directionToMove);
+    /* Print the time to be set */
+    printFormatedDateAndTime(hourDifference, minuteDifference, secondsDifference, 0u, 0u, 0u); 
+#endif
     /* Move the hands of the clock with the respective secondes. */
     moveClockHands(directionToMove, secondsToStep);
     /* Reset the stepper motor direction to default (CW) */
@@ -658,6 +620,7 @@ void moveClockHands(uint8_t directionToMove, uint16_t secondsToStep)
     digitalWrite(STEPPER_DIR_PIN, CW_DIR); /* Set direction cw */
 }
 
+#ifdef DEBUGGING
 /***************************************************************************************************************
  * @brief Handle serial commands for debugging and manual control.
  * @param None
@@ -677,21 +640,18 @@ void debugSerial(void)
 
         if (command == "fwd")
         {
-            Serial.print("CW direction for: ");
-            Serial.print(secondsToStep);
-            Serial.println(" seconds");
+            Serial.println("CW direction for: ");
+            
+            printFormatedDateAndTime(num1, num2, num3, 0u, 0u, 0u); /* Print the time to be set */
 
             moveClockHands(CW_DIR, secondsToStep);
-            
-            Serial.println("Done!");
-            Serial.println("");
         }
 
         if (command == "bwd")
         {
-            Serial.print("CCW direction for: ");
-            Serial.print(secondsToStep);
-            Serial.println(" seconds");
+            Serial.println("CCW direction for: ");
+
+            printFormatedDateAndTime(num1, num2, num3, 0u, 0u, 0u); /* Print the time to be set */
 
             moveClockHands(CCW_DIR, secondsToStep);
             
@@ -703,14 +663,11 @@ void debugSerial(void)
         {
             uint16_t index = (EEPROM[0] << 8) | EEPROM[1];
             
-            Serial.println("read EEPROM index: ");
+            Serial.print("read EEPROM index: ");
             Serial.println(index);
-            Serial.print("Hour: ");
-            Serial.println(EEPROM[index]);
-            Serial.print("Minute: ");
-            Serial.println(EEPROM[index + 1]);
-            Serial.println("Done!");
-            Serial.println("");
+
+            printFormatedDateAndTime(CLEAR_TIME_RECOVER_FLAG(EEPROM[index]), EEPROM[index + 1], EEPROM[index + 2],
+                                     EEPROM[4], EEPROM[5], EEPROM[6] + 2000); /* Read saved time from EEPROM */
         }
 
         if (command == "reb")
@@ -727,42 +684,24 @@ void debugSerial(void)
             Serial.println("");
         }
 
-        if (command == "rrtc")
+        if (command == "rtc")
         { /* Read RTC */
             DateTime currentTime = rtc.now();
 
             Serial.print("Current time: ");
-            Serial.print(currentTime.hour(), DEC);
-            Serial.print(":");
-            Serial.print(currentTime.minute(), DEC);
-            Serial.print(":");
-            Serial.println(currentTime.second(), DEC);
-            Serial.print("Current date: ");
-            Serial.print(currentTime.day(), DEC);
-            Serial.print('/');
-            Serial.print(currentTime.month(), DEC);
-            Serial.print('/');
-            Serial.println(currentTime.year(), DEC);
-            Serial.println(daysOfTheWeek[currentTime.dayOfTheWeek()]);
-            Serial.println("Done!");
-            Serial.println("");
+
+            printFormatedDateAndTime(currentTime.hour(), currentTime.minute(), currentTime.second(),
+                                     currentTime.day(), currentTime.month(), currentTime.year());
         }
 
-        if (command == "rvolt")
-        { /* Read arduino input voltage */
-            
-            handleBrownOut();
-            Serial.println("Done.");
-        }
-
-        if (command == "weet")
+        if (command == "wet")
         {
             uint8_t retval = SUCCESS;
             Serial.println("write time to EEPROM ");
 
             num1 = SET_TIME_RECOVER_FLAG(num1); /* Set the MSB bit 8 to signal time is ready for recover */
 
-            retval = writeToEEPROM(num3, num1, num2, 30u, 1, 1, 25); /* Write current time to EEPROM */
+            retval = writeToEEPROM(num3, num1, num2, 30u, 0, 0, 0); /* Write current time to EEPROM */
 
             Serial.print("Done with status ");
             if (retval == SUCCESS)
@@ -777,7 +716,7 @@ void debugSerial(void)
             Serial.println("");
         }
 
-        if (command == "weeb")
+        if (command == "web")
         {
             Serial.println("Write bytes to EEPROM");
 
@@ -801,3 +740,33 @@ void debugSerial(void)
         }
     }
 }
+
+
+/***************************************************************************************************************
+ * @brief Print time and date.
+ * @param None
+ * @return None
+ * @note This function prints the current time and date from the RTC to the serial interface.
+ */
+void printFormatedDateAndTime(uint8_t hour, uint8_t minute, uint8_t second, uint8_t day, uint8_t month, uint16_t year)
+{
+    Serial.print(hour, DEC);
+    Serial.print(":");
+    Serial.print(minute, DEC);
+    Serial.print(":");
+    Serial.println(second, DEC);
+
+    if (0u != day)
+    {
+        Serial.print("Current date: ");
+        Serial.print(day, DEC);
+        Serial.print('/');
+        Serial.print(month, DEC);
+        Serial.print('/');
+        Serial.println(year, DEC);
+    }
+
+    Serial.println("Done!");
+    Serial.println("");
+}
+#endif // DEBUGGING

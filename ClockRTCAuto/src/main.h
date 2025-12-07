@@ -25,8 +25,8 @@
 #define CW_DIR                          LOW     /* Clockwise direction */
 #define CCW_DIR                         HIGH    /* Counterclockwise direction */
 #define STEPPER_PULSE_TIME              5       /* Time in microsec for stepper pulse */
-#define STEPPER_DELAY_TIME              45      /* Delay between pulses to set correct time clock */
-#define FINE_TIME_ADJUSTMENT            1       /* Time in microsec for stepper pulse for time precision */
+#define STEPPER_DELAY_TIME              44      /* Delay between pulses to set correct time clock */
+#define FINE_TIME_ADJUSTMENT            995     /* (us) stepper pulse for time precision. FINE_TIME_ADJUSTMENT + STEPPER_PULSE_TIME(ms) + STEPPER_DELAY_TIME(us) = 1 step time in (1/16) mode: 45ms -> 1 step*/
 #define STEPPER_FAST_TIME_ADJUSTMENT    100     /* Time in miliseconds for stepper pulse to adjust the time faster */
 
 #define EEPROM_MAX_USE_SIZE             1021u   /* 0x03FDu -> Size of EEPROM 1024 from 0 to 1023, and we write 3 Bytes at once. */

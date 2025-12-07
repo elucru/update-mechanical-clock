@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"name": "ClockSimple",
+			"path": "../../ClockSimple"
+		},
+		{
+			"name": "ClockSerial",
+			"path": "../../ClockSerial"
+		},
+		{
+			"name": "ClockRTCAuto",
+			"path": ".."
+		}
+	],
+	"settings": {}
+}

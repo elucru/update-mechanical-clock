@@ -7,8 +7,11 @@ The project is to breathe life into the old clock from the Primary School, by re
 
 The project is being implemented in several phases:
 - In the first phase, I use a very simple program to rotate the minutes using the gearbox, but programmed to rotate the minute hand 360 degrees in an hour. Setting the clock is done serially from a Laptop with another program.
-- In the second phase, we use an RTC to auto-tune the clock, using a minute feedback (Hall sensor and a magnet set at 12 o'clock).
-- In the third phase, at set times sing different songs.
+- In the second phase, we use an RTC to keep time up to date wheh power go down, an resistive devider to signal when power go down. Arduino is connected to an UPS and when the main power goes down, save the time in EEPROM. When power is restored, read the time from EEPROM compare with the time from RTC and set the clock accordingly.
+- In the third phase, we want to use a feedback (Hall sensor and a magnet set at 12 o'clock) and to set different songs to sing like an announcements.
 
 ## Technical data
-Next Time ...
+Next Time ... until then if you have some questions:
+
+elucru@gmail.com
+
