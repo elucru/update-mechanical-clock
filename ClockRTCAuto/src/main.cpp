@@ -165,6 +165,10 @@ void loop()
     if (currentPowerCheckState != lastPowerCheckState)
     {/* The POWER_DOWN_PIN state has been changed, monitoring the duration of the change begins. */
         lastDebounceTime = millis();
+        if (lastDebounceTime >= MAX_MILLIS_IN_DELAY)
+        {
+            lastDebounceTime = 0u; /* Reset if overflow is less then 5 seconds. */
+        }  
     }
 
     if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY)

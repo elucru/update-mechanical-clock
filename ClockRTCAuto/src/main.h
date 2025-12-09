@@ -38,6 +38,7 @@
 #define CHECK_TIME_RECOVER_FLAG(x)      ((x & 0x80) >> 7)   /* Check bit 7 to signal time is ready for recover */
 #define SUCCESS                         0u
 #define ERROR                           1u
+#define MAX_MILLIS_IN_DELAY            4294962000u /* Maximum value for unsigned long millis() is 4,294,967,295u; power debounce time is 5 sec + 295 ms robustness. */
 
 #endif
 /* MAIN_H End of file*/
