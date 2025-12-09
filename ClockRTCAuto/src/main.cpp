@@ -80,7 +80,14 @@ void setup()
         Serial.flush();
 #endif
         while (1)
+        {
             delay(10); /* Stop the program if RTC is not found */
+            if (rtc.begin())
+            {/* Start the program if RTC is found */
+                Serial.println("RTC OK now!");
+                break;
+            }
+        }
     }
 
 #ifdef DEBUGGING
@@ -100,21 +107,22 @@ void setup()
     pinMode(STEPPER_DIR_PIN, OUTPUT);
     digitalWrite(STEPPER_DIR_PIN, LOW); /* Set default direction (CW) */
 
+    /* EEPROM is used for saving date and time in case of power down. */
     /* Read index from EEPROM for robustness and to verify if was an reset or power down. */
     uint16_t index = (EEPROM[0] << 8) | EEPROM[1]; 
 
     /* Check if index exceeds EEPROM size */
     if (index > EEPROM_MAX_USE_SIZE)
-    {/* Reset EEPROM if index exceeds limit (1024) or a new uC with a virgin EEPROM. */
+    {/* Reset EEPROM if index exceeds limit (1024) or is a new uC. */
         resetCounters();
-        EEPROM[1u] = 4u;
+        EEPROM[1u] = 4u;/* This will be incremented with 3 at first power down, so time will be saved in EEPROM[7]! */
     }
     else
     {/* Check if time is allready saved in EEPROM. 
         In case of uC reset don't save time in EEPROM again, just normal clock action. */
         uint8_t recoveryFlag = CHECK_TIME_RECOVER_FLAG(EEPROM[index]);
         
-        if (0 != recoveryFlag)
+        if (false != recoveryFlag)
         { /* Check if the MSB bit is set, indicating that time was not recovery yet. */
             saveTimeToEEPROM = true;
             powerDown = true; /* Set powerDown to true to avoid immediate power down handling */
@@ -155,19 +163,19 @@ void loop()
 
     /* Handle debounce logic */
     if (currentPowerCheckState != lastPowerCheckState)
-    {
+    {/* The POWER_DOWN_PIN state has been changed, monitoring the duration of the change begins. */
         lastDebounceTime = millis();
     }
 
     if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY)
-    {
+    {/* Only the change above the DEBOUNCE_DELAY threshold is taken into account, to avoid spikes and short power downs. */
         powerDown = (currentPowerCheckState == LOW);
     }
-
+    /* Update the POWER_DOWN_PIN state. */
     lastPowerCheckState = currentPowerCheckState;
 
     if (SUCCESS == writeToEEPROMStatus)
-    {
+    {/* If the last save in EEPROM is corrupted or unusable the clock stops. */
         if (true == powerDown)
         {
             handlePowerDown();
@@ -200,13 +208,14 @@ void handlePowerDown(void)
 }
 
 /***************************************************************************************************************
- * @brief Save the current time to EEPROM.
+ * @brief Save the current date and time in EEPROM.
  * @param None
  * @return None
  * @note This function saves the current hour and minutes and seconds to EEPROM at the specified index.
  *  It also saves the current day, month, and year to fixed location in EEPROM if are different from what is
- *   allready saved. Also it sets a flag to indicate that time has been saved to EEPROM and never recover it.
- *  When the power is up, the flag is reset.
+ *   allready saved.
+ * Also it sets a flag to indicate that time has been saved to EEPROM and not recover yet. When the power is up,
+ *  the flag is reset.
  */
 void saveTime(void)
 {
@@ -258,9 +267,13 @@ void saveTime(void)
 
 /***************************************************************************************************************
  * @brief Write time to EEPROM with error handling and verification.
- * @param index: 2 Bytes EEPROM index to write to.
+ * @param index: EEPROM index where the time is saveing.
  * @param currentHour: hour when power down was detected.
  * @param currentMinute: minute when power down was detected.
+ * @param currentSecond: second when power down was detected.
+ * @param currentDay: day when power down was detected.
+ * @param currentMonth: month when power down was detected.
+ * @param currentYear: year when power down was detected.
  * @return status of the write operation:
  *                  0: EEPROM write successful,
  *                  1: failed to write in EEPROM.
@@ -366,7 +379,6 @@ uint8_t writeToEEPROM(uint16_t index, uint8_t currentHour, uint8_t currentMinute
         }
     }
 
-
 #ifdef DEBUGGING
     Serial.println("EEPROM write successful.");
 #endif
@@ -400,7 +412,7 @@ void resetCounters(void)
 {
     for (uint8_t i = 0; i < 7u; i++)
     {
-        EEPROM.write(i, 0); /* Reset upper byte of index */
+        EEPROM.write(i, 0);/* Reset index, counter and date.*/
     }
 }
 
@@ -622,7 +634,7 @@ void moveClockHands(uint8_t directionToMove, uint16_t secondsToStep)
 
 #ifdef DEBUGGING
 /***************************************************************************************************************
- * @brief Handle serial commands for debugging and manual control.
+ * @brief Handle serial commands for debugging and manual clock adjustments.
  * @param None
  * @return None
  * @note This function reads commands from the serial interface and performs various operations
@@ -632,6 +644,7 @@ void debugSerial(void)
 {
     if (Serial.available())
     {
+        /* Read the command to execute and three bytes with data to use in the command. */
         String command = Serial.readStringUntil(' ');
         uint16_t num1 = Serial.parseInt();
         uint16_t num2 = Serial.parseInt();
@@ -639,8 +652,8 @@ void debugSerial(void)
         uint16_t secondsToStep = ((num1 * 3600) + (num2 * 60) + num3); /* Convert hours and minutes to seconds */
 
         if (command == "fwd")
-        {
-            Serial.println("CW direction for: ");
+        {/* This command is used to move the clock forward with number of seconds calculate above. */
+            Serial.print("CW direction for: ");
             
             printFormatedDateAndTime(num1, num2, num3, 0u, 0u, 0u); /* Print the time to be set */
 
@@ -648,8 +661,8 @@ void debugSerial(void)
         }
 
         if (command == "bwd")
-        {
-            Serial.println("CCW direction for: ");
+        {/* This command is used to move the clock backward with number of seconds calculate above. */
+            Serial.print("CCW direction for: ");
 
             printFormatedDateAndTime(num1, num2, num3, 0u, 0u, 0u); /* Print the time to be set */
 
@@ -734,6 +747,7 @@ void debugSerial(void)
             Serial.println("Reset all bytes to EEPROM to 0xFF");
 
             resetEEPROM();
+            resetCounters();/* For robustness if a reset not occured. */
             
             Serial.println("Done!");
             Serial.println("");
@@ -743,8 +757,13 @@ void debugSerial(void)
 
 
 /***************************************************************************************************************
- * @brief Print time and date.
- * @param None
+ * @brief Print time and date in a formated mode.
+ * @param hour: one bytes, hour to print.
+ * @param minute: one bytes, minute to print.
+ * @param second: one bytes, second to print.
+ * @param day: one bytes, day to print.
+ * @param month: one bytes, month to print.
+ * @param year: two bytes, year to print.
  * @return None
  * @note This function prints the current time and date from the RTC to the serial interface.
  */
